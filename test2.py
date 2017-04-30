@@ -140,6 +140,24 @@ def slide_window(image, startx, nonzerox=None, nonzeroy=None, nwindows=9):
     return lane_inds
 
 
+def calculate_curvature_radius(leftx, lefty, rightx, righty):
+    """Calculate the curvature radius, but in the world coordinate"""
+
+    ym_per_pix = 30 / 720    # meters per pixel in y dimension
+    xm_per_pix = 3.7 / 700   # meters per pixel in x dimension
+    y_eval = 720             # eval radius at the bottom of the image
+
+    # fit new polynomials to x,y in world space
+    left_fit_cr = np.polyfit(lefty * ym_per_pix, leftx * xm_per_pix, 2)
+    right_fit_cr = np.polyfit(righty * ym_per_pix, rightx * xm_per_pix, 2)
+
+    # calculate the new radii of curvature
+    left_curve_radius = ((1 + (2*left_fit_cr[0]*y_eval*ym_per_pix + left_fit_cr[1])**2)**1.5) / np.absolute(2*left_fit_cr[0])
+    right_curve_radius = ((1 + (2*right_fit_cr[0]*y_eval*ym_per_pix + right_fit_cr[1])**2)**1.5) / np.absolute(2*right_fit_cr[0])
+
+    return left_curve_radius, right_curve_radius
+
+
 def find_lines(image, p_left_fit=None, p_right_fit=None):
     """Returns the lane lines as function fit, given a binary image. It uses
     the previous fit to speed up the calculations"""
@@ -186,11 +204,14 @@ def find_lines(image, p_left_fit=None, p_right_fit=None):
     rightx = nonzerox[right_lane_inds]
     righty = nonzeroy[right_lane_inds]
 
+    # calculate the curvature of the lanes
+    lc, rc = calculate_curvature_radius(leftx, lefty, rightx, righty)
+
     # fit a second order polynomial to each
     left_fit = np.polyfit(lefty, leftx, 2)
     right_fit = np.polyfit(righty, rightx, 2)
 
-    return left_fit, right_fit
+    return left_fit, right_fit, lc, rc
 
 
 def static_vars(**kwargs):
@@ -223,9 +244,10 @@ def _pipeline(img, cmx, dist):
     binary_warped = cv2.warpPerspective(bin_img, M, img_shape, flags=cv2.INTER_LINEAR)
 
     # search for the lines in the frame
-    _pipeline.left_fit, _pipeline.right_fit = find_lines(binary_warped,
-                                                         _pipeline.left_fit,
-                                                         _pipeline.right_fit)
+    _pipeline.left_fit, _pipeline.right_fit, lc, rc = \
+        find_lines(binary_warped,
+                   _pipeline.left_fit,
+                   _pipeline.right_fit)
 
     # output image
     layer = np.zeros_like(binary_warped).astype(np.uint8)
@@ -247,6 +269,12 @@ def _pipeline(img, cmx, dist):
 
     # unwarp and add to the original image
     layer_unwarp = cv2.warpPerspective(layer, Minv, img_shape, flags=cv2.INTER_LINEAR)
+
+    cv2.putText(img, "left radius: {0:9.2f} m".format(lc),
+                (100, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
+    cv2.putText(img,
+                "right radius:{0:9.2f} m".format(rc),
+                (100, 130), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255))
 
     return cv2.addWeighted(img, 1, layer_unwarp, 0.3, 0)
 
